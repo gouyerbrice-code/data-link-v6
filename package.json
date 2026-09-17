@@ -1,0 +1,18 @@
+{
+  "name": "data-link-v6",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DATA LINK V6 — P0 foundation",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "lint": "node scripts/lint.mjs",
+    "typecheck": "node scripts/typecheck.mjs",
+    "test": "node --test",
+    "build": "node scripts/build.mjs",
+    "health-check": "node scripts/health-check.mjs",
+    "verify": "npm run lint && npm run typecheck && npm test && npm run build && npm run health-check"
+  }
+}

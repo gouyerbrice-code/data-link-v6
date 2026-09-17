@@ -1,0 +1,155 @@
+import { createRequestContext } from "../core/request-context.mjs";
+import { DataLinkError, ERROR_CODES, errorPayload } from "../core/errors.mjs";
+
+export function createRouter({ config, logger, identityService = null, resolveAuthenticatedUser = null, pipelineService = null, profileService = null }) {
+  async function handle(request) {
+    const url = new URL(request.url);
+    const context = createRequestContext(Object.fromEntries(request.headers.entries()));
+
+    try {
+      if (request.method === "GET" && url.pathname === "/health") {
+        return json(200, {
+          status: "ok",
+          service: config.app.name,
+          request_id: context.request_id,
+        }, context);
+      }
+
+      if (request.method === "GET" && url.pathname === "/ready") {
+        return json(200, {
+          status: "ready",
+          service: config.app.name,
+          environment: config.app.environment,
+          request_id: context.request_id,
+        }, context);
+      }
+
+      if (url.pathname.startsWith("/auth/") || url.pathname === "/tenants" ||
+          url.pathname === "/bases" || url.pathname === "/companies" || url.pathname === "/groups") {
+        if (!identityService || !resolveAuthenticatedUser) {
+          throw new DataLinkError(
+            ERROR_CODES.AUTHENTICATION_ERROR,
+            "Identity authentication adapter is not configured",
+            { status: 503 },
+          );
+        }
+
+        const userId = await resolveAuthenticatedUser(request);
+        const tenantId = request.headers.get("x-tenant-id");
+
+        if (request.method === "GET" && url.pathname === "/auth/context") {
+          return json(200, await identityService.getContext({ userId, tenantId }), context);
+        }
+        if (request.method === "GET" && url.pathname === "/tenants") {
+          return json(200, await identityService.getTenants(userId), context);
+        }
+        if (request.method === "GET" && url.pathname === "/bases") {
+          return json(200, await identityService.getBases(userId, requiredTenant(tenantId)), context);
+        }
+        if (request.method === "GET" && url.pathname === "/companies") {
+          return json(200, await identityService.getCompanies(userId, requiredTenant(tenantId)), context);
+        }
+        if (request.method === "GET" && url.pathname === "/groups") {
+          return json(200, await identityService.getGroups(userId, requiredTenant(tenantId)), context);
+        }
+      }
+
+      if (identityService && resolveAuthenticatedUser && request.method === "GET" && ["/sources","/source-files","/profiles","/rules"].includes(url.pathname)) {
+        const userId = await resolveAuthenticatedUser(request);
+        const tenantId = request.headers.get("x-tenant-id");
+        if (!tenantId) throw new DataLinkError(ERROR_CODES.VALIDATION_ERROR, "X-Tenant-Id is required", { status: 400 });
+        await identityService.getContext({ userId, tenantId });
+        if (url.pathname === "/sources") return json(200, pipelineService.repository.findBy("sources", x => x.tenant_id === tenantId), context);
+        if (url.pathname === "/source-files") return json(200, pipelineService.repository.findBy("source_files", x => x.tenant_id === tenantId), context);
+        if (url.pathname === "/profiles") return json(200, profileService.list(), context);
+        if (url.pathname === "/rules") return json(200, pipelineService.repository.list("rules"), context);
+      }
+
+      if (pipelineService && identityService && resolveAuthenticatedUser && request.method === "GET") {
+        const match = url.pathname.match(/^\/(raw|profiling|runs|entities)(?:\/([^/]+))?(?:\/steps)?$/);
+        if (match) {
+          const userId = await resolveAuthenticatedUser(request);
+          const tenantId = request.headers.get("x-tenant-id");
+          await identityService.getContext({ userId, tenantId });
+          const kind = match[1], id = match[2];
+          if (kind === "raw" && id) {
+            const raw = pipelineService.repository.find("raw_snapshots", id);
+            if (!raw || raw.tenant_id !== tenantId) throw new DataLinkError(ERROR_CODES.NOT_FOUND, "RAW snapshot not found", {status:404});
+            return json(200, raw, context);
+          }
+          if (kind === "profiling" && id) {
+            const rows = pipelineService.repository.findBy("profiling_results", x => x.run_id === id && x.tenant_id === tenantId);
+            if (!rows.length) throw new DataLinkError(ERROR_CODES.NOT_FOUND, "Profiling result not found", {status:404});
+            return json(200, rows[0], context);
+          }
+          if (kind === "runs" && id) {
+            const run = pipelineService.repository.find("runs", id);
+            if (!run || run.tenant_id !== tenantId) throw new DataLinkError(ERROR_CODES.NOT_FOUND, "RUN not found", {status:404});
+            if (url.pathname.endsWith("/steps")) return json(200, pipelineService.repository.findBy("steps", x => x.run_id === id), context);
+            return json(200, run, context);
+          }
+          if (kind === "entities" && id) {
+            const entity = pipelineService.repository.find("entities", id);
+            if (!entity || entity.tenant_id !== tenantId) throw new DataLinkError(ERROR_CODES.NOT_FOUND, "Entity not found", {status:404});
+            return json(200, entity, context);
+          }
+        }
+      }
+
+      if (pipelineService && identityService && resolveAuthenticatedUser && request.method === "POST" && url.pathname === "/sources") {
+        const userId = await resolveAuthenticatedUser(request);
+        const tenantId = request.headers.get("x-tenant-id");
+        await identityService.getContext({ userId, tenantId });
+        const body = await request.json();
+        return json(201, await pipelineService.createSource({ user_id: userId, tenant_id: tenantId }, body), context);
+      }
+
+      if (pipelineService && identityService && resolveAuthenticatedUser && request.method === "POST" && url.pathname === "/ingestion/files") {
+        const userId = await resolveAuthenticatedUser(request);
+        const tenantId = request.headers.get("x-tenant-id");
+        await identityService.getContext({ userId, tenantId });
+        const body = await request.json();
+        if (!body?.content_base64) throw new DataLinkError(ERROR_CODES.VALIDATION_ERROR, "content_base64 is required", { status: 400 });
+        const buffer = Buffer.from(body.content_base64, "base64");
+        return json(201, await pipelineService.ingestFile(
+          { user_id: userId, tenant_id: tenantId },
+          { source_id: body.source_id, filename: body.filename, mime_type: body.mime_type, buffer, metadata: body.metadata ?? {} },
+        ), context);
+      }
+
+      return json(404, {
+        error: {
+          code: ERROR_CODES.NOT_FOUND,
+          message: "Route not found",
+          request_id: context.request_id,
+        },
+      }, context);
+    } catch (error) {
+      logger.error("api.request_failed", {
+        request_id: context.request_id,
+        module: "api",
+        error_code: error?.code,
+      });
+      return json(error?.status ?? 500, errorPayload(error, context.request_id), context);
+    }
+  }
+
+  return { handle };
+}
+
+function requiredTenant(value) {
+  if (!value) {
+    throw new DataLinkError(ERROR_CODES.VALIDATION_ERROR, "X-Tenant-Id is required", { status: 400 });
+  }
+  return value;
+}
+
+function json(status, body, context) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "x-request-id": context.request_id,
+    },
+  });
+}
