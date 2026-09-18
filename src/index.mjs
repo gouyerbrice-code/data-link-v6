@@ -4,6 +4,11 @@ import { createLogger } from "./core/logger.mjs";
 import { createSupabaseAdapter } from "./infrastructure/supabase/client.mjs";
 import { IdentityRepository } from "./identity/repository/identity-repository.mjs";
 import { IdentityService } from "./identity/service/identity-service.mjs";
+import { MemoryPipelineRepository } from "./pipeline/memory-repository.mjs";
+import { PipelineService } from "./ingestion/pipeline-service.mjs";
+import { PrivateLocalStorage } from "./storage/local-storage.mjs";
+import { ProfileService } from "./profiles/profile-service.mjs";
+import { VERSION } from "./core/version.mjs";
 
 const config = loadConfig();
 
@@ -18,19 +23,38 @@ const supabase = createSupabaseAdapter({
 });
 
 const identityRepository = new IdentityRepository({ supabase });
+
 const identityService = new IdentityService({
   repository: identityRepository,
+});
+
+const pipelineRepository = new MemoryPipelineRepository();
+
+const storage = new PrivateLocalStorage({
+  root: process.env.DATALINK_STORAGE_ROOT ?? "./.datalink-storage",
+});
+
+const pipelineService = new PipelineService({
+  repository: pipelineRepository,
+  storage,
+  securityContext: {},
+  versions: VERSION,
+});
+
+const profileService = new ProfileService({
+  repository: pipelineRepository,
 });
 
 const server = createHttpServer({
   config,
   logger,
-  supabase,
   identityService,
   resolveAuthenticatedUser: (request) =>
     supabase.getUser(
-      request.headers.get("authorization")?.replace(/^Bearer\s+/i, "")
+      request.headers.get("authorization")?.replace(/^Bearer\s+/i, ""),
     ),
+  pipelineService,
+  profileService,
 });
 
 server.listen(config.app.port, config.app.host, () => {
