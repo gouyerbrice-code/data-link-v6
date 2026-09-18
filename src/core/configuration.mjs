@@ -18,11 +18,13 @@ function required(env, name) {
 
 export function loadConfig(env = process.env) {
   const environment = env.NODE_ENV ?? "development";
+
   if (!ALLOWED_ENVIRONMENTS.has(environment)) {
     throw new Error(`Unsupported NODE_ENV: ${environment}`);
   }
 
   const logLevel = env.LOG_LEVEL ?? "info";
+
   if (!ALLOWED_LOG_LEVELS.has(logLevel)) {
     throw new Error(`Unsupported LOG_LEVEL: ${logLevel}`);
   }
@@ -34,23 +36,36 @@ export function loadConfig(env = process.env) {
       host: read("HOST", "127.0.0.1"),
       port: Number(read("PORT", "3000")),
     },
+
     version: VERSION,
-    logging: { level: logLevel },
+
+    logging: {
+      level: logLevel,
+    },
+
     supabase: {
       url: env.SUPABASE_URL ?? null,
-      anonKey: env.SUPABASE_ANON_KEY ?? null,
+      anonKey: null,
+      secretKey: env.SUPABASE_SECRET_KEY ?? null,
     },
+
     featureFlags: {},
   };
 
-  if (!Number.isInteger(config.app.port) || config.app.port < 1 || config.app.port > 65535) {
+  if (
+    !Number.isInteger(config.app.port) ||
+    config.app.port < 1 ||
+    config.app.port > 65535
+  ) {
     throw new Error("PORT must be an integer between 1 and 65535");
   }
 
-  if (env.NODE_ENV === "production") {
-    // P0 intentionally validates only the presence of production-critical
-    // runtime values when production is actually selected. No production
-    // environment is configured by this phase.
+  if (environment !== "test") {
+    required(env, "SUPABASE_URL");
+    required(env, "SUPABASE_SECRET_KEY");
+  }
+
+  if (environment === "production") {
     required(env, "APP_NAME");
   }
 
