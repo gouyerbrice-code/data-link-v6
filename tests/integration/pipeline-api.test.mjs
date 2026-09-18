@@ -32,9 +32,30 @@ test("POST /sources then GET /sources",async()=>{
 
 test("POST /ingestion/files creates private artifact and source file",async()=>{
   const source=r.list("sources")[0];
-  const content=Buffer.from("a,b\n1,2\n").toString("base64");
-  const res=await router.handle(new Request("http://localhost/ingestion/files",{method:"POST",headers:{"x-tenant-id":tenant,"content-type":"application/json"},body:JSON.stringify({source_id:source.id,filename:"data.csv",mime_type:"text/csv",content_base64:content})}));
-  assert.equal(res.status,201); const body=await res.json(); assert.equal(body.duplicate,false); assert.equal(body.artifact.storage_provider,"local-private");
+
+  const form=new FormData();
+  form.append("source_id",source.id);
+  form.append(
+    "file",
+    new Blob(["a,b\\n1,2\\n"],{type:"text/csv"}),
+    "data.csv",
+  );
+
+  const res=await router.handle(
+    new Request("http://localhost/ingestion/files",{
+      method:"POST",
+      headers:{
+        "x-tenant-id":tenant,
+        "Idempotency-Key":"pipeline-api-ingestion-v1",
+      },
+      body:form,
+    }),
+  );
+
+  assert.equal(res.status,201);
+  const body=await res.json();
+  assert.equal(body.duplicate,false);
+  assert.equal(body.artifact.storage_provider,"local-private");
 });
 
 test("pipeline read APIs remain tenant-scoped",async()=>{

@@ -11,13 +11,40 @@ export const FILE_POLICY = Object.freeze({
   }),
 });
 
+export function sanitizeFileName(name) {
+  const value = String(name ?? "").trim();
+
+  if (!value) {
+    throw new Error("Filename is required");
+  }
+
+  if (value.length > 255) {
+    throw new Error("Filename is too long");
+  }
+
+  if (value.includes("\\") || value.includes("/")) {
+    throw new Error("Filename must not contain path separators");
+  }
+
+  if (value === "." || value === "..") {
+    throw new Error("Invalid filename");
+  }
+
+  if (/[\x00-\x1F\x7F]/.test(value)) {
+    throw new Error("Filename contains control characters");
+  }
+
+  return value;
+}
+
 export function extensionOf(name) {
   const dot = String(name).lastIndexOf(".");
   return dot >= 0 ? String(name).slice(dot).toLowerCase() : "";
 }
 
 export function validateFileMetadata({ name, sizeBytes, mimeType }) {
-  const extension = extensionOf(name);
+  const safeName = sanitizeFileName(name);
+  const extension = extensionOf(safeName);
   if (!FILE_POLICY.allowed[extension]) throw new Error(`Unsupported file extension: ${extension || "(none)"}`);
   if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 0 || sizeBytes > FILE_POLICY.maxBytes) {
     throw new Error("File exceeds configured size limit");
@@ -27,5 +54,5 @@ export function validateFileMetadata({ name, sizeBytes, mimeType }) {
   if (!allowed.includes(mimeType) && mimeType !== "application/octet-stream") {
     throw new Error(`MIME type does not match extension: ${mimeType}`);
   }
-  return { extension };
+  return { extension, filename: safeName };
 }

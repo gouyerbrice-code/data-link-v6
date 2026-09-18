@@ -107,14 +107,83 @@ export function createRouter({ config, logger, identityService = null, resolveAu
       if (pipelineService && identityService && resolveAuthenticatedUser && request.method === "POST" && url.pathname === "/ingestion/files") {
         const userId = await resolveAuthenticatedUser(request);
         const tenantId = request.headers.get("x-tenant-id");
+
         await identityService.getContext({ userId, tenantId });
-        const body = await request.json();
-        if (!body?.content_base64) throw new DataLinkError(ERROR_CODES.VALIDATION_ERROR, "content_base64 is required", { status: 400 });
-        const buffer = Buffer.from(body.content_base64, "base64");
-        return json(201, await pipelineService.ingestFile(
-          { user_id: userId, tenant_id: tenantId },
-          { source_id: body.source_id, filename: body.filename, mime_type: body.mime_type, buffer, metadata: body.metadata ?? {} },
-        ), context);
+
+        const contentType = request.headers.get("content-type") ?? "";
+
+        if (!contentType.toLowerCase().startsWith("multipart/form-data")) {
+          throw new DataLinkError(
+            ERROR_CODES.VALIDATION_ERROR,
+            "multipart/form-data is required",
+            { status:400 },
+          );
+        }
+
+        let form;
+
+        try {
+          form = await request.formData();
+        } catch {
+          throw new DataLinkError(
+            ERROR_CODES.VALIDATION_ERROR,
+            "Invalid multipart/form-data payload",
+            { status:400 },
+          );
+        }
+
+        const file = form.get("file");
+        const sourceId = form.get("source_id");
+        const metadataValue = form.get("metadata");
+        const idempotencyKey = request.headers.get("idempotency-key");
+
+        if (!(file instanceof File)) {
+          throw new DataLinkError(
+            ERROR_CODES.VALIDATION_ERROR,
+            "file is required",
+            { status:400 },
+          );
+        }
+
+        if (typeof sourceId !== "string" || !sourceId.trim()) {
+          throw new DataLinkError(
+            ERROR_CODES.VALIDATION_ERROR,
+            "source_id is required",
+            { status:400 },
+          );
+        }
+
+        let metadata = {};
+
+        if (metadataValue) {
+          try {
+            metadata = JSON.parse(String(metadataValue));
+          } catch {
+            throw new DataLinkError(
+              ERROR_CODES.VALIDATION_ERROR,
+              "metadata must be valid JSON",
+              { status:400 },
+            );
+          }
+        }
+
+        const buffer = Buffer.from(await file.arrayBuffer());
+
+        return json(
+          201,
+          await pipelineService.ingestFile(
+            { user_id:userId, tenant_id:tenantId },
+            {
+              source_id:sourceId,
+              filename:file.name,
+              mime_type:file.type || "application/octet-stream",
+              buffer,
+              metadata,
+              idempotency_key:idempotencyKey,
+            },
+          ),
+          context,
+        );
       }
 
       return json(404, {

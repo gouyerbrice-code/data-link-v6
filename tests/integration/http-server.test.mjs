@@ -130,7 +130,7 @@ test("real HTTP server forwards JSON body to router", async (t) => {
   assert.equal(repository.list("sources").length, 1);
 });
 
-test("real HTTP server forwards ingestion JSON body", async (t) => {
+test("real HTTP server accepts multipart file ingestion", async (t) => {
   const { server, repository } = createTestServer();
 
   await new Promise((resolve) => {
@@ -150,7 +150,7 @@ test("real HTTP server forwards ingestion JSON body", async (t) => {
         "x-tenant-id": tenant,
       },
       body: JSON.stringify({
-        name: "Import source",
+        name: "Multipart source",
         source_type: "FILE",
       }),
     },
@@ -160,24 +160,27 @@ test("real HTTP server forwards ingestion JSON body", async (t) => {
 
   const source = await sourceResponse.json();
 
-  const content = Buffer
-    .from("reference,designation\nA001,Article test\n")
-    .toString("base64");
+  const form = new FormData();
+  form.append(
+    "file",
+    new Blob(
+      ["reference,designation\nA001,Article test\n"],
+      { type:"text/csv" },
+    ),
+    "articles.csv",
+  );
+  form.append("source_id", source.id);
+  form.append("metadata", JSON.stringify({ test:true }));
 
   const ingestionResponse = await fetch(
     `http://127.0.0.1:${address.port}/ingestion/files`,
     {
       method: "POST",
       headers: {
-        "content-type": "application/json",
         "x-tenant-id": tenant,
+        "Idempotency-Key": "http-multipart-p31-001",
       },
-      body: JSON.stringify({
-        source_id: source.id,
-        filename: "articles.csv",
-        mime_type: "text/csv",
-        content_base64: content,
-      }),
+      body: form,
     },
   );
 
@@ -186,9 +189,112 @@ test("real HTTP server forwards ingestion JSON body", async (t) => {
   const result = await ingestionResponse.json();
 
   assert.equal(result.duplicate, false);
+  assert.equal(result.idempotent_replay, undefined);
   assert.equal(result.source_file.tenant_id, tenant);
+  assert.equal(result.source_file.original_name, "articles.csv");
   assert.equal(result.artifact.storage_provider, "local-private");
 
   assert.equal(repository.list("source_files").length, 1);
   assert.equal(repository.list("artifacts").length, 1);
+});
+
+test("multipart ingestion is idempotent for the same Idempotency-Key", async (t) => {
+  const { server, repository } = createTestServer();
+
+  await new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+
+  t.after(() => server.close());
+
+  const address = server.address();
+
+  const sourceResponse = await fetch(
+    `http://127.0.0.1:${address.port}/sources`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-tenant-id": tenant,
+      },
+      body: JSON.stringify({
+        name: "Idempotency source",
+        source_type: "FILE",
+      }),
+    },
+  );
+
+  const source = await sourceResponse.json();
+
+  async function upload() {
+    const form = new FormData();
+
+    form.append(
+      "file",
+      new Blob(["a,b\n1,2\n"], { type:"text/csv" }),
+      "idempotent.csv",
+    );
+
+    form.append("source_id", source.id);
+
+    return fetch(
+      `http://127.0.0.1:${address.port}/ingestion/files`,
+      {
+        method:"POST",
+        headers:{
+          "x-tenant-id":tenant,
+          "Idempotency-Key":"http-idempotency-p31-001",
+        },
+        body:form,
+      },
+    );
+  }
+
+  const first = await upload();
+  const firstBody = await first.json();
+
+  const second = await upload();
+  const secondBody = await second.json();
+
+  assert.equal(first.status, 201);
+  assert.equal(second.status, 201);
+  assert.equal(firstBody.source_file.id, secondBody.source_file.id);
+  assert.equal(secondBody.idempotent_replay, true);
+
+  assert.equal(repository.list("source_files").length, 1);
+  assert.equal(repository.list("artifacts").length, 1);
+});
+
+test("multipart ingestion rejects non-multipart payloads", async () => {
+  const { server } = createTestServer();
+
+  await new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+
+  const address = server.address();
+
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/ingestion/files`,
+      {
+        method:"POST",
+        headers:{
+          "content-type":"application/json",
+          "x-tenant-id":tenant,
+        },
+        body:JSON.stringify({
+          source_id:"missing",
+          content_base64:"abc",
+        }),
+      },
+    );
+
+    assert.equal(response.status, 400);
+
+    const body = await response.json();
+    assert.equal(body.error.code, "VALIDATION_ERROR");
+  } finally {
+    server.close();
+  }
 });

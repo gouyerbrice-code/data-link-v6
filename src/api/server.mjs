@@ -27,7 +27,7 @@ export function createHttpServer({
     try {
       const origin = `http://${req.headers.host ?? `${config.app.host}:${config.app.port}`}`;
 
-      const body = await readRequestBody(req);
+      const body = await readRequestBody(req, config.ingestion?.maxBytes);
 
       const request = new Request(`${origin}${req.url}`, {
         method: req.method,
@@ -68,15 +68,35 @@ export function createHttpServer({
   return server;
 }
 
-async function readRequestBody(req) {
+async function readRequestBody(req, maxBytes = 25 * 1024 * 1024) {
   if (req.method === "GET" || req.method === "HEAD") {
     return Buffer.alloc(0);
   }
 
+  const contentLength = Number(req.headers["content-length"]);
+
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    const error = new Error("Request body exceeds configured size limit");
+    error.status = 413;
+    error.code = "FILE_TOO_LARGE";
+    throw error;
+  }
+
   const chunks = [];
+  let total = 0;
 
   for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const part = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += part.length;
+
+    if (total > maxBytes) {
+      const error = new Error("Request body exceeds configured size limit");
+      error.status = 413;
+      error.code = "FILE_TOO_LARGE";
+      throw error;
+    }
+
+    chunks.push(part);
   }
 
   return Buffer.concat(chunks);
