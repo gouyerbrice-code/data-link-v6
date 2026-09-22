@@ -3,30 +3,53 @@ import { DataLinkError, ERROR_CODES } from "../core/errors.mjs";
 const RUN=["PENDING","RUNNING","COMPLETED","FAILED","CANCELLED"], STEP=["PENDING","RUNNING","COMPLETED","FAILED","SKIPPED","CANCELLED"];
 const RUN_TRANSITIONS={PENDING:new Set(["RUNNING","CANCELLED"]),RUNNING:new Set(["COMPLETED","FAILED","CANCELLED"]),FAILED:new Set(["RUNNING","CANCELLED"]),COMPLETED:new Set(),CANCELLED:new Set()};
 const STEP_TRANSITIONS={PENDING:new Set(["RUNNING","SKIPPED","CANCELLED"]),RUNNING:new Set(["COMPLETED","FAILED","CANCELLED"]),FAILED:new Set(["RUNNING","CANCELLED"]),COMPLETED:new Set(),SKIPPED:new Set(),CANCELLED:new Set()};
-export class RunService{
-  constructor({repository,versions}){this.r=repository;this.v=versions;}
-  ctx(c){if(!c?.user_id||!c?.tenant_id)throw new DataLinkError(ERROR_CODES.AUTHORIZATION_ERROR,"Security Context required",{status:403});}
-  create(c,{job_type="PIPELINE",source_file_id=null,profile_version_id=null,rule_version_id=null,configuration_version=null,configuration_hash=null,execution_id=randomUUID(),idempotency_key=null}) {
+
+export class RunService {
+  constructor({ repository, versions }) { this.r=repository; this.v=versions; }
+  ctx(c){ if(!c?.user_id||!c?.tenant_id) throw new DataLinkError(ERROR_CODES.AUTHORIZATION_ERROR,"Security Context required",{status:403}); }
+
+  async create(c,{job_type="PIPELINE",source_file_id=null,profile_version_id=null,rule_version_id=null,configuration_version=null,configuration_hash=null,execution_id=randomUUID(),idempotency_key=null}) {
     this.ctx(c);
     const key=idempotency_key ?? `${c.tenant_id}:${execution_id}`;
-    const existingJob=this.r.findBy("jobs",x=>x.tenant_id===c.tenant_id&&x.idempotency_key===key)[0];
+    const existingJob=(await this.r.findBy("jobs",x=>x.tenant_id===c.tenant_id&&x.idempotency_key===key))[0];
     if(existingJob){
-      const existingRun=this.r.findBy("runs",x=>x.job_id===existingJob.id)[0];
+      const existingRun=(await this.r.findBy("runs",x=>x.job_id===existingJob.id))[0];
       return existingRun ?? this.r.insert("runs",{execution_id,tenant_id:c.tenant_id,job_id:existingJob.id,engine_mode:"V6_NATIVE",engine_version:this.v.engine_version,profile_version_id,rule_version_id,configuration_version,configuration_hash,status:"PENDING",progress:0,retry_count:0,statistics:{},errors:[],created_at:new Date().toISOString()});
     }
-    const job=this.r.insert("jobs",{tenant_id:c.tenant_id,source_file_id,job_type,status:"PENDING",priority:0,idempotency_key:key,created_at:new Date().toISOString()});
-    const existingExecution=this.r.findBy("runs",x=>x.execution_id===execution_id)[0];
+    const job=await this.r.insert("jobs",{tenant_id:c.tenant_id,source_file_id,job_type,status:"PENDING",priority:0,idempotency_key:key,created_at:new Date().toISOString()});
+    const existingExecution=(await this.r.findBy("runs",x=>x.execution_id===execution_id))[0];
     if(existingExecution) return existingExecution;
     return this.r.insert("runs",{execution_id,tenant_id:c.tenant_id,job_id:job.id,engine_mode:"V6_NATIVE",engine_version:this.v.engine_version,profile_version_id,rule_version_id,configuration_version,configuration_hash,status:"PENDING",progress:0,retry_count:0,statistics:{},errors:[],created_at:new Date().toISOString()});
   }
-  step(c,runId,{step_type,sequence,idempotency_key}) {
+
+  async step(c,runId,{step_type,sequence,idempotency_key}) {
     this.ctx(c);
-    const run=this.r.find("runs",runId);
-    if(!run||run.tenant_id!==c.tenant_id)throw new DataLinkError(ERROR_CODES.NOT_FOUND,"Run not found",{status:404});
-    const existing=this.r.findBy("steps",x=>x.run_id===runId&&(x.idempotency_key===idempotency_key||x.sequence===sequence))[0];
-    if(existing)return existing;
+    const run=await this.r.find("runs",runId);
+    if(!run||run.tenant_id!==c.tenant_id) throw new DataLinkError(ERROR_CODES.NOT_FOUND,"Run not found",{status:404});
+    const existing=(await this.r.findBy("steps",x=>x.run_id===runId&&(x.idempotency_key===idempotency_key||x.sequence===sequence)))[0];
+    if(existing) return existing;
     return this.r.insert("steps",{run_id:runId,step_type,sequence,status:"PENDING",idempotency_key,progress:0,input:{},output:{},errors:[],created_at:new Date().toISOString()});
   }
-  transition(c,runId,status,patch={}){this.ctx(c);if(!RUN.includes(status))throw new Error("Invalid RUN state");const run=this.r.find("runs",runId);if(!run||run.tenant_id!==c.tenant_id)throw new DataLinkError(ERROR_CODES.NOT_FOUND,"Run not found",{status:404});if(run.status===status)return run;if(!RUN_TRANSITIONS[run.status].has(status))throw new DataLinkError(ERROR_CODES.VALIDATION_ERROR,`Invalid RUN transition: ${run.status} -> ${status}`,{status:409});const now=new Date().toISOString();return this.r.update("runs",runId,{status,...patch,...(status==="RUNNING"?{started_at:now,heartbeat_at:now,finished_at:null,retry_count:run.status==="FAILED"?run.retry_count+1:run.retry_count}:{}),...(status==="COMPLETED"||status==="FAILED"||status==="CANCELLED"?{finished_at:now}: {})});}
-  stepTransition(c,stepId,status,patch={}){this.ctx(c);if(!STEP.includes(status))throw new Error("Invalid STEP state");const s=this.r.find("steps",stepId);if(!s)throw new DataLinkError(ERROR_CODES.NOT_FOUND,"Step not found",{status:404});const run=this.r.find("runs",s.run_id);if(!run||run.tenant_id!==c.tenant_id)throw new DataLinkError(ERROR_CODES.NOT_FOUND,"Step not found",{status:404});if(s.status===status)return s;if(!STEP_TRANSITIONS[s.status].has(status))throw new DataLinkError(ERROR_CODES.VALIDATION_ERROR,`Invalid STEP transition: ${s.status} -> ${status}`,{status:409});const now=new Date().toISOString();return this.r.update("steps",stepId,{status,...patch,...(status==="RUNNING"?{started_at:now}:{}),...(status==="COMPLETED"||status==="FAILED"||status==="CANCELLED"?{finished_at:now}: {})});}
+
+  async transition(c,runId,status,patch={}) {
+    this.ctx(c); if(!RUN.includes(status)) throw new Error("Invalid RUN state");
+    const run=await this.r.find("runs",runId);
+    if(!run||run.tenant_id!==c.tenant_id) throw new DataLinkError(ERROR_CODES.NOT_FOUND,"Run not found",{status:404});
+    if(run.status===status) return run;
+    if(!RUN_TRANSITIONS[run.status].has(status)) throw new DataLinkError(ERROR_CODES.VALIDATION_ERROR,`Invalid RUN transition: ${run.status} -> ${status}`,{status:409});
+    const now=new Date().toISOString();
+    return this.r.update("runs",runId,{status,...patch,...(status==="RUNNING"?{started_at:now,heartbeat_at:now,finished_at:null,retry_count:run.status==="FAILED"?run.retry_count+1:run.retry_count}:{}),...(status==="COMPLETED"||status==="FAILED"||status==="CANCELLED"?{finished_at:now}:{})});
+  }
+
+  async stepTransition(c,stepId,status,patch={}) {
+    this.ctx(c); if(!STEP.includes(status)) throw new Error("Invalid STEP state");
+    const s=await this.r.find("steps",stepId);
+    if(!s) throw new DataLinkError(ERROR_CODES.NOT_FOUND,"Step not found",{status:404});
+    const run=await this.r.find("runs",s.run_id);
+    if(!run||run.tenant_id!==c.tenant_id) throw new DataLinkError(ERROR_CODES.NOT_FOUND,"Step not found",{status:404});
+    if(s.status===status) return s;
+    if(!STEP_TRANSITIONS[s.status].has(status)) throw new DataLinkError(ERROR_CODES.VALIDATION_ERROR,`Invalid STEP transition: ${s.status} -> ${status}`,{status:409});
+    const now=new Date().toISOString();
+    return this.r.update("steps",stepId,{status,...patch,...(status==="RUNNING"?{started_at:now}:{}),...(status==="COMPLETED"||status==="FAILED"||status==="CANCELLED"?{finished_at:now}:{})});
+  }
 }
