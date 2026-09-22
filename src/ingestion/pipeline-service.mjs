@@ -98,8 +98,7 @@ export class PipelineService {
       const batch = rows.slice(i, i + batchSize).map((payload, offset) => ({
         tenant_id: ctx.tenant_id, snapshot_id: snapshot.id, record_number: i + offset + 1, payload, created_at: now,
       }));
-      const { error } = await this.repository.db.from("v6_raw_records").insert(batch);
-      if (error) throw error;
+      await this.repository.insertMany("raw_records", batch);
     }
 
     return this.repository.update("raw_snapshots", snapshot.id, { status: "COMPLETE" });
