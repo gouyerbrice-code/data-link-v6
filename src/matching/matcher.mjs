@@ -63,7 +63,7 @@ export function scorePair(left, right, { fields = {}, signalStats = {} } = {}) {
   let decision = "NO_MATCH";
   if (barcodeConflict) decision = "A_CONTROLER";
   else if (barcodeExact && designation >= MATCHING_THRESHOLDS.candidate_designation) decision = "IDENTIQUE";
-  else if ((reference || supplierReference) && score >= MATCHING_THRESHOLDS.match_fort) decision = "MATCH_FORT";
+  else if ((reference || supplierReference) && designation >= MATCHING_THRESHOLDS.candidate_designation) decision = "MATCH_FORT";
   else if (score >= MATCHING_THRESHOLDS.identical && (reference || supplierReference || brand)) decision = "IDENTIQUE";
   else if (score >= MATCHING_THRESHOLDS.match_fort && (reference || supplierReference || brand)) decision = "MATCH_FORT";
   else if (score >= MATCHING_THRESHOLDS.candidate_designation || reference || supplierReference || brand) decision = "A_CONTROLER";
