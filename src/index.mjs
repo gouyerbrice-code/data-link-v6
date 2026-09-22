@@ -8,7 +8,7 @@ import { SupabasePipelineRepository } from "./pipeline/supabase-repository.mjs";
 import { PipelineService } from "./ingestion/pipeline-service.mjs";
 import { PrivateLocalStorage } from "./storage/local-storage.mjs";
 import { ProfileService } from "./profiles/profile-service.mjs";
-import { RunService } from "./runs/run-service.mjs";
+import { SupabaseRunService } from "./runs/supabase-run-service.mjs";
 import { PipelineExecutionService } from "./pipeline/execution-service.mjs";
 import { SupabaseMatchingRepository } from "./matching/supabase-matching-repository.mjs";
 import { MatchingService } from "./matching/matching-service.mjs";
@@ -24,7 +24,7 @@ const matchingRepository=new SupabaseMatchingRepository({supabase});
 const storage=new PrivateLocalStorage({root:process.env.DATALINK_STORAGE_ROOT??"./.datalink-storage"});
 const pipelineService=new PipelineService({repository:pipelineRepository,storage,securityContext:{},versions:VERSION});
 const profileService=new ProfileService({repository:pipelineRepository});
-const runService=new RunService({repository:pipelineRepository,versions:VERSION});
+const runService=new SupabaseRunService({repository:pipelineRepository,versions:VERSION});
 const executionService=new PipelineExecutionService({repository:pipelineRepository,runService,profileService,versions:VERSION});
 const matchingService=new MatchingService({repository:matchingRepository});
 
