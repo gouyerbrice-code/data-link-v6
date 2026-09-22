@@ -34,6 +34,13 @@ export class SupabasePipelineRepository {
     return data;
   }
 
+  async insertMany(name, rows) {
+    if (!rows?.length) return [];
+    const { data, error } = await this.db.from(this.table(name)).insert(rows).select();
+    if (error) throw error;
+    return data ?? [];
+  }
+
   async find(name, id) {
     const { data, error } = await this.db.from(this.table(name)).select("*").eq("id", id).maybeSingle();
     if (error) throw error;
