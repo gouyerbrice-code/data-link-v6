@@ -71,10 +71,10 @@ export function createRouter({ config, logger, identityService = null, resolveAu
         const tenantId = request.headers.get("x-tenant-id");
         if (!tenantId) throw new DataLinkError(ERROR_CODES.VALIDATION_ERROR, "X-Tenant-Id is required", { status: 400 });
         await identityService.getContext({ userId, tenantId });
-        if (url.pathname === "/sources") return json(200, pipelineService.repository.findBy("sources", x => x.tenant_id === tenantId), context);
-        if (url.pathname === "/source-files") return json(200, pipelineService.repository.findBy("source_files", x => x.tenant_id === tenantId), context);
-        if (url.pathname === "/profiles") return json(200, profileService.list(), context);
-        if (url.pathname === "/rules") return json(200, pipelineService.repository.list("rules"), context);
+        if (url.pathname === "/sources") return json(200, await pipelineService.repository.findBy("sources", x => x.tenant_id === tenantId), context);
+        if (url.pathname === "/source-files") return json(200, await pipelineService.repository.findBy("source_files", x => x.tenant_id === tenantId), context);
+        if (url.pathname === "/profiles") return json(200, await profileService.list(), context);
+        if (url.pathname === "/rules") return json(200, await pipelineService.repository.list("rules"), context);
       }
 
       if (pipelineService && identityService && resolveAuthenticatedUser && request.method === "GET") {
@@ -85,23 +85,23 @@ export function createRouter({ config, logger, identityService = null, resolveAu
           await identityService.getContext({ userId, tenantId });
           const kind = match[1], id = match[2];
           if (kind === "raw" && id) {
-            const raw = pipelineService.repository.find("raw_snapshots", id);
+            const raw = await pipelineService.repository.find("raw_snapshots", id);
             if (!raw || raw.tenant_id !== tenantId) throw new DataLinkError(ERROR_CODES.NOT_FOUND, "RAW snapshot not found", {status:404});
             return json(200, raw, context);
           }
           if (kind === "profiling" && id) {
-            const rows = pipelineService.repository.findBy("profiling_results", x => x.run_id === id && x.tenant_id === tenantId);
+            const rows = await pipelineService.repository.findBy("profiling_results", x => x.run_id === id && x.tenant_id === tenantId);
             if (!rows.length) throw new DataLinkError(ERROR_CODES.NOT_FOUND, "Profiling result not found", {status:404});
             return json(200, rows[0], context);
           }
           if (kind === "runs" && id) {
-            const run = pipelineService.repository.find("runs", id);
+            const run = await pipelineService.repository.find("runs", id);
             if (!run || run.tenant_id !== tenantId) throw new DataLinkError(ERROR_CODES.NOT_FOUND, "RUN not found", {status:404});
-            if (url.pathname.endsWith("/steps")) return json(200, pipelineService.repository.findBy("steps", x => x.run_id === id), context);
+            if (url.pathname.endsWith("/steps")) return json(200, await pipelineService.repository.findBy("steps", x => x.run_id === id), context);
             return json(200, run, context);
           }
           if (kind === "entities" && id) {
-            const entity = pipelineService.repository.find("entities", id);
+            const entity = await pipelineService.repository.find("entities", id);
             if (!entity || entity.tenant_id !== tenantId) throw new DataLinkError(ERROR_CODES.NOT_FOUND, "Entity not found", {status:404});
             return json(200, entity, context);
           }
