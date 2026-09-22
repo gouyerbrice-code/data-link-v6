@@ -13,6 +13,8 @@ export function createHttpServer({
   resolveAuthenticatedUser = null,
   pipelineService = null,
   profileService = null,
+  matchingService = null,
+  executionService = null,
 } = {}) {
   const router = createRouter({
     config,
@@ -21,6 +23,8 @@ export function createHttpServer({
     resolveAuthenticatedUser,
     pipelineService,
     profileService,
+    matchingService,
+    executionService,
   });
 
   const server = createServer(async (req, res) => {

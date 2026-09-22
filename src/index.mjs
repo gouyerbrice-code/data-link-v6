@@ -8,6 +8,9 @@ import { MemoryPipelineRepository } from "./pipeline/memory-repository.mjs";
 import { PipelineService } from "./ingestion/pipeline-service.mjs";
 import { PrivateLocalStorage } from "./storage/local-storage.mjs";
 import { ProfileService } from "./profiles/profile-service.mjs";
+import { RunService } from "./runs/run-service.mjs";
+import { PipelineExecutionService } from "./pipeline/execution-service.mjs";
+import { MatchingService } from "./matching/matching-service.mjs";
 import { VERSION } from "./core/version.mjs";
 
 const config = loadConfig();
@@ -44,6 +47,9 @@ const pipelineService = new PipelineService({
 const profileService = new ProfileService({
   repository: pipelineRepository,
 });
+const runService = new RunService({ repository: pipelineRepository, versions: VERSION });
+const executionService = new PipelineExecutionService({ repository: pipelineRepository, runService, profileService, versions: VERSION });
+const matchingService = new MatchingService({ repository: pipelineRepository });
 
 const server = createHttpServer({
   config,
@@ -55,6 +61,8 @@ const server = createHttpServer({
     ),
   pipelineService,
   profileService,
+  matchingService,
+  executionService,
 });
 
 server.listen(config.app.port, config.app.host, () => {

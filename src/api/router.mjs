@@ -1,7 +1,7 @@
 import { createRequestContext } from "../core/request-context.mjs";
 import { DataLinkError, ERROR_CODES, errorPayload } from "../core/errors.mjs";
 
-export function createRouter({ config, logger, identityService = null, resolveAuthenticatedUser = null, pipelineService = null, profileService = null }) {
+export function createRouter({ config, logger, identityService = null, resolveAuthenticatedUser = null, pipelineService = null, profileService = null, matchingService = null, executionService = null }) {
   async function handle(request) {
     const url = new URL(request.url);
     const context = createRequestContext(Object.fromEntries(request.headers.entries()));
@@ -102,6 +102,29 @@ export function createRouter({ config, logger, identityService = null, resolveAu
         await identityService.getContext({ userId, tenantId });
         const body = await request.json();
         return json(201, await pipelineService.createSource({ user_id: userId, tenant_id: tenantId }, body), context);
+      }
+
+      if (matchingService && identityService && resolveAuthenticatedUser && request.method === "POST") {
+        const executeMatch = url.pathname.match(/^\/runs\/([^/]+)\/matching$/);
+        const decideMatch = url.pathname.match(/^\/matches\/([^/]+)\/decision$/);
+        if (executeMatch || decideMatch) {
+          const userId = await resolveAuthenticatedUser(request);
+          const tenantId = requiredTenant(request.headers.get("x-tenant-id"));
+          await identityService.getContext({ userId, tenantId });
+          const body = await request.json();
+          if (executeMatch) return json(201, matchingService.execute({ user_id: userId, tenant_id: tenantId }, { runId: executeMatch[1], ...body }), context);
+          return json(201, matchingService.decide({ user_id: userId, tenant_id: tenantId }, { matchId: decideMatch[1], ...body }), context);
+        }
+      }
+
+      if (executionService && identityService && resolveAuthenticatedUser && request.method === "POST") {
+        const execute = url.pathname.match(/^\/source-files\/([^/]+)\/execute$/);
+        if (execute) {
+          const userId = await resolveAuthenticatedUser(request);
+          const tenantId = requiredTenant(request.headers.get("x-tenant-id"));
+          await identityService.getContext({ userId, tenantId });
+          return json(201, await executionService.execute({ user_id: userId, tenant_id: tenantId }, { sourceFileId: execute[1], ...(await request.json()) }), context);
+        }
       }
 
       if (pipelineService && identityService && resolveAuthenticatedUser && request.method === "POST" && url.pathname === "/ingestion/files") {

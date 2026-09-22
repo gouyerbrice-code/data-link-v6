@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 export class MemoryPipelineRepository {
   constructor() {
     this.tables = new Map();
-    for (const t of ["sources","source_files","artifacts","raw_snapshots","raw_records","profiles","profile_versions","rules","rule_versions","synonyms","jobs","runs","steps","profiling_results","entities"]) this.tables.set(t, new Map());
+    for (const t of ["sources","source_files","artifacts","raw_snapshots","raw_records","profiles","profile_versions","rules","rule_versions","synonyms","jobs","runs","steps","profiling_results","entities","matches","match_candidates","match_decisions","anomalies","masters"]) this.tables.set(t, new Map());
   }
   #t(name){return this.tables.get(name)}
   insert(table,row){const id=row.id??randomUUID(); const value={...row,id}; this.#t(table).set(id,value); return structuredClone(value)}
