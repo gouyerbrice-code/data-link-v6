@@ -16,6 +16,9 @@ export function createRouter({ config, logger, identityService = null, resolveAu
       if (request.method === "GET" && url.pathname === "/config") {
         return json(200, { supabase_url: config.supabase.url, supabase_publishable_key: config.supabase.publishableKey }, context);
       }
+      if (request.method === "GET" && url.pathname === "/platform") {
+        return json(200, { name: config.app.name, version: config.version.product_version, engine_version: config.version.engine_version, status: "ready", modules: ["dashboard","imports","runs","matching","validation","master"] }, context);
+      }
       if (request.method === "GET" && url.pathname === "/health") {
         return json(200, {
           status: "ok",
