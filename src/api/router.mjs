@@ -139,6 +139,65 @@ export function createRouter({ config, logger, identityService = null, resolveAu
         }
       }
 
+
+      if (pipelineService && executionService && matchingService && identityService && resolveAuthenticatedUser && request.method === "POST" && url.pathname === "/workflows/pmm-pmb") {
+        const userId = await resolveAuthenticatedUser(request);
+        const tenantId = requiredTenant(request.headers.get("x-tenant-id"));
+        await identityService.getContext({ userId, tenantId });
+        const form = await request.formData();
+        const pmm = form.get("pmm");
+        const pmb = form.get("pmb");
+        if (!(pmm instanceof File) || !(pmb instanceof File)) throw new DataLinkError(ERROR_CODES.VALIDATION_ERROR, "PMM et PMB sont requis", {status:400});
+
+        const now = new Date().toISOString();
+        const job = await pipelineService.repository.insert("jobs", {
+          tenant_id:tenantId, job_type:"PMM_PMB_WORKFLOW", status:"QUEUED", priority:100,
+          idempotency_key:"pmm-pmb:"+Date.now()+":"+Math.random().toString(36).slice(2), created_at:now,
+        });
+
+        const run = async () => {
+          try {
+            await pipelineService.repository.update("jobs", job.id, {status:"RUNNING",started_at:new Date().toISOString()});
+            const ingestOne = async (file, role) => {
+              const sourceName = role === "PMB" ? "PMB — Référentiel" : "PMM — Source";
+              const sources = await pipelineService.repository.findBy("sources", x => x.tenant_id === tenantId && x.name === sourceName);
+              const source = sources[0] ?? await pipelineService.createSource({user_id:userId,tenant_id:tenantId},{name:sourceName,source_type:"FILE",metadata:{role,workflow:"PMM_PMB"}});
+              const buffer = Buffer.from(await file.arrayBuffer());
+              const ing = await pipelineService.ingestFile({user_id:userId,tenant_id:tenantId},{
+                source_id:source.id,filename:file.name,mime_type:file.type||"application/octet-stream",buffer,
+                metadata:{role,workflow:"PMM_PMB"},idempotency_key:job.id+":"+role+":"+file.name,
+              });
+              if (!ing.duplicate) ing.raw_snapshot = await pipelineService.createRawSnapshot({user_id:userId,tenant_id:tenantId},{
+                source_file_id:ing.source_file.id,buffer,filename:file.name,mime_type:file.type||"application/octet-stream",
+              });
+              return ing.source_file;
+            };
+
+            const pmbFile = await ingestOne(pmb,"PMB");
+            const pmmFile = await ingestOne(pmm,"PMM");
+            const config = {
+              entity_type:"ARTICLE",
+              identity_fields:["Référence","Gencode","Réf Fourn"],
+              field_rules:Object.fromEntries(["Référence","Gencode","Réf Fourn","Désignation","C.Fourn","Nom Fournisseur"].map(k=>[k,["trim","collapse_whitespace"]])),
+            };
+            const pmbExec = await executionService.execute({user_id:userId,tenant_id:tenantId},{sourceFileId:pmbFile.id,configuration:config});
+            const pmmExec = await executionService.execute({user_id:userId,tenant_id:tenantId},{sourceFileId:pmmFile.id,configuration:config});
+            const canonicalIds = pmbExec.entities.map(x=>x.id);
+            const sourceIds = pmmExec.entities.map(x=>x.id);
+            const match = await matchingService.execute({user_id:userId,tenant_id:tenantId},{
+              runId:pmmExec.run.id,sourceEntityIds:sourceIds,canonicalEntityIds:canonicalIds,
+              fields:{reference:"Référence",barcode:"Gencode",supplier_reference:"Réf Fourn",designation:"Désignation"},
+              maxCandidates:50,scope:"GROUP",
+            });
+            await pipelineService.repository.update("jobs",job.id,{status:"COMPLETED",finished_at:new Date().toISOString(),request_fingerprint:JSON.stringify({pmm:pmmFile.id,pmb:pmbFile.id,pmm_run:pmmExec.run.id,pmb_run:pmbExec.run.id,matches:match.matches.length})});
+          } catch (error) {
+            await pipelineService.repository.update("jobs",job.id,{status:"FAILED",finished_at:new Date().toISOString(),error:{message:error.message,code:error.code??"WORKFLOW_ERROR"}});
+          }
+        };
+        setImmediate(run);
+        return json(202,{workflow_id:job.id,status:"QUEUED",message:"Analyse PMM / PMB lancée"},context);
+      }
+
       if (pipelineService && identityService && resolveAuthenticatedUser && request.method === "POST" && url.pathname === "/ingestion/files") {
         const userId = await resolveAuthenticatedUser(request);
         const tenantId = request.headers.get("x-tenant-id");
