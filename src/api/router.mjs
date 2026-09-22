@@ -112,8 +112,8 @@ export function createRouter({ config, logger, identityService = null, resolveAu
           const tenantId = requiredTenant(request.headers.get("x-tenant-id"));
           await identityService.getContext({ userId, tenantId });
           const body = await request.json();
-          if (executeMatch) return json(201, matchingService.execute({ user_id: userId, tenant_id: tenantId }, { runId: executeMatch[1], ...body }), context);
-          return json(201, matchingService.decide({ user_id: userId, tenant_id: tenantId }, { matchId: decideMatch[1], ...body }), context);
+          if (executeMatch) return json(201, await matchingService.execute({ user_id: userId, tenant_id: tenantId }, { ...body, runId: executeMatch[1] }), context);
+          return json(201, await matchingService.decide({ user_id: userId, tenant_id: tenantId }, { ...body, matchId: decideMatch[1] }), context);
         }
       }
 
@@ -123,7 +123,7 @@ export function createRouter({ config, logger, identityService = null, resolveAu
           const userId = await resolveAuthenticatedUser(request);
           const tenantId = requiredTenant(request.headers.get("x-tenant-id"));
           await identityService.getContext({ userId, tenantId });
-          return json(201, await executionService.execute({ user_id: userId, tenant_id: tenantId }, { sourceFileId: execute[1], ...(await request.json()) }), context);
+          return json(201, await executionService.execute({ user_id: userId, tenant_id: tenantId }, { ...(await request.json()), sourceFileId: execute[1] }), context);
         }
       }
 

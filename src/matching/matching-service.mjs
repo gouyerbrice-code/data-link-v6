@@ -1,39 +1,26 @@
 import { randomUUID } from "node:crypto";
 import { DataLinkError, ERROR_CODES } from "../core/errors.mjs";
 import { generateCandidates } from "./candidate-generator.mjs";
-import { scorePair, MATCH_ENGINE_VERSION } from "./matcher.mjs";
+import { scorePair, MATCH_ENGINE_VERSION, normalizeValue, designationTokens } from "./matcher.mjs";
 
 export class MatchingService {
-  constructor({ repository }) { this.r = repository; }
-  #ctx(ctx) { if (!ctx?.tenant_id || !ctx?.user_id) throw new DataLinkError(ERROR_CODES.AUTHORIZATION_ERROR, "Security Context required", { status: 403 }); }
-  execute(ctx, { runId, sourceEntityIds, canonicalEntityIds, fields = {} }) {
-    this.#ctx(ctx);
-    const run = this.r.find("runs", runId);
-    if (!run || run.tenant_id !== ctx.tenant_id) throw new DataLinkError(ERROR_CODES.NOT_FOUND, "Run not found", { status: 404 });
-    const owned = (ids) => ids.map((id) => this.r.find("entities", id)).map((entity) => {
-      if (!entity || entity.tenant_id !== ctx.tenant_id) throw new DataLinkError(ERROR_CODES.NOT_FOUND, "Entity not found", { status: 404 }); return entity;
-    });
-    const sources = owned(sourceEntityIds), canonicals = owned(canonicalEntityIds);
-    const pairs = generateCandidates(sources, canonicals, fields);
-    const candidates = pairs.map(({ left, right }) => this.r.insert("match_candidates", { tenant_id: ctx.tenant_id, run_id: runId, source_entity_id: left.id, canonical_entity_id: right.id, created_at: new Date().toISOString() }));
-    const scored = pairs.map(({ left, right }, index) => ({ candidate: candidates[index], source: left, canonical: right, result: scorePair(left, right, fields) }));
-    const matches = [];
-    for (const [sourceId, rows] of Map.groupBy(scored, (row) => row.source.id)) {
-      const top = Math.max(...rows.map((row) => row.result.score)); const winners = rows.filter((row) => row.result.score === top);
-      for (const row of winners) {
-        const decision = winners.length > 1 && row.result.decision !== "NO_MATCH" ? "COLLISION" : row.result.decision;
-        const match = this.r.insert("matches", { id: randomUUID(), tenant_id: ctx.tenant_id, run_id: runId, source_entity_id: sourceId, canonical_entity_id: row.canonical.id, candidate_id: row.candidate.id, engine_version: MATCH_ENGINE_VERSION, score: row.result.score, proposed_decision: decision, signals: row.result.signals, created_at: new Date().toISOString() });
-        matches.push(match);
-        if (decision === "COLLISION") this.r.insert("anomalies", { tenant_id: ctx.tenant_id, run_id: runId, anomaly_type: "COLLISION", source_entity_id: sourceId, details: { candidate_count: winners.length }, created_at: new Date().toISOString() });
-      }
+  constructor({ repository }) { this.r=repository; }
+  #ctx(ctx) { if(!ctx?.tenant_id || !ctx?.user_id) throw new DataLinkError(ERROR_CODES.AUTHORIZATION_ERROR,"Security Context required",{status:403}); }
+  async execute(ctx,{runId,sourceEntityIds=[],canonicalEntityIds=[],fields={},maxCandidates=50,scope="GROUP"}) {
+    this.#ctx(ctx); const run=await this.r.getRun(ctx.tenant_id,runId); if(!run)throw new DataLinkError(ERROR_CODES.NOT_FOUND,"Run not found",{status:404});
+    const [sources,canonicals]=await Promise.all([this.r.getEntities(ctx.tenant_id,sourceEntityIds),this.r.getEntities(ctx.tenant_id,canonicalEntityIds)]);
+    if(sources.length!==sourceEntityIds.length||canonicals.length!==canonicalEntityIds.length)throw new DataLinkError(ERROR_CODES.NOT_FOUND,"Entity not found",{status:404});
+    const tokenFrequency=new Map(); for(const e of canonicals)for(const t of designationTokens(e.normalized_payload?.[fields.designation??"designation"]))tokenFrequency.set(t,(tokenFrequency.get(t)??0)+1);
+    const pairs=generateCandidates(sources,canonicals,{fields,maxCandidates,tokenFrequency});
+    const bySource=new Map(); for(const pair of pairs){const result=scorePair(pair.left,pair.right,{fields,signalStats:{designationTokenFrequency:tokenFrequency}}); const rows=bySource.get(pair.left.id)??[]; rows.push({...pair,result});bySource.set(pair.left.id,rows);}
+    const matches=[],candidates=[],anomalies=[];
+    for(const [sourceId,rows] of bySource){ rows.sort((a,b)=>b.result.score-a.result.score || b.blocking_priority-a.blocking_priority); const top=rows[0]; const tied=rows.filter(x=>Math.abs(x.result.score-top.result.score)<0.0001); const decision=tied.length>1 && top.result.decision!=="NO_MATCH"?"COLLISION":top.result.decision;
+      const match=await this.r.insertMatch({id:randomUUID(),tenant_id:ctx.tenant_id,run_id:runId,entity_a_id:sourceId,entity_b_id:top.right.id,scope,score:Number(top.result.score.toFixed(4)),confidence:Number(top.result.confidence.toFixed(4)),decision,status:"ANALYZED",reason:decision,evidence:top.result.evidence,engine_version:MATCH_ENGINE_VERSION}); matches.push(match);
+      const candidateRows=rows.map((row,i)=>({tenant_id:ctx.tenant_id,match_id:match.id,candidate_entity_id:row.right.id,rank:i+1,score:Number(row.result.score.toFixed(4)),confidence:Number(row.result.confidence.toFixed(4)),reference_score:row.result.scores.reference,designation_score:row.result.scores.designation,brand_score:row.result.scores.brand,barcode_score:row.result.scores.barcode,supplier_reference_score:row.result.scores.supplier_reference,signals:row.result.signals,evidence:row.result.evidence}));
+      candidates.push(...await this.r.insertCandidates(candidateRows));
+      if(decision==="COLLISION") anomalies.push(await this.r.insertAnomaly({tenant_id:ctx.tenant_id,run_id:runId,entity_type:"MATCH",entity_id:match.id,severity:"HIGH",code:"MATCH_COLLISION",message:"Multiple candidates have the same top score",evidence:{source_entity_id:sourceId,candidate_count:tied.length}}));
     }
-    return { engine_version: MATCH_ENGINE_VERSION, candidates, matches, anomalies: this.r.findBy("anomalies", (row) => row.run_id === runId && row.tenant_id === ctx.tenant_id) };
+    return {engine_version:MATCH_ENGINE_VERSION,run_id:runId,matches,candidates,anomalies};
   }
-  decide(ctx, { matchId, decision, rationale = null }) {
-    this.#ctx(ctx); if (!new Set(["IDENTIQUE", "MATCH_FORT", "A_CONTROLER", "COLLISION", "NO_MATCH"]).has(decision)) throw new DataLinkError(ERROR_CODES.VALIDATION_ERROR, "Invalid decision", { status: 400 });
-    const match = this.r.find("matches", matchId); if (!match || match.tenant_id !== ctx.tenant_id) throw new DataLinkError(ERROR_CODES.NOT_FOUND, "Match not found", { status: 404 });
-    const existing = this.r.findBy("match_decisions", (row) => row.match_id === matchId && row.tenant_id === ctx.tenant_id)[0];
-    if (existing) return this.r.update("match_decisions", existing.id, { decision, rationale, decided_by: ctx.user_id, decided_at: new Date().toISOString() });
-    return this.r.insert("match_decisions", { tenant_id: ctx.tenant_id, match_id: matchId, decision, rationale, decided_by: ctx.user_id, decided_at: new Date().toISOString() });
-  }
+  async decide(ctx,{matchId,decision,justification}) { this.#ctx(ctx); const allowed=new Set(["IDENTIQUE","MATCH_FORT","A_CONTROLER","COLLISION","NO_MATCH"]); if(!allowed.has(decision)||!String(justification??"").trim())throw new DataLinkError(ERROR_CODES.VALIDATION_ERROR,"decision and justification are required",{status:400}); const match=await this.r.getMatch(ctx.tenant_id,matchId); if(!match)throw new DataLinkError(ERROR_CODES.NOT_FOUND,"Match not found",{status:404}); return this.r.insertDecision({id:randomUUID(),tenant_id:ctx.tenant_id,match_id:matchId,decision,justification:justification.trim(),decision_source:"USER",user_id:ctx.user_id,engine_version:MATCH_ENGINE_VERSION}); }
 }
