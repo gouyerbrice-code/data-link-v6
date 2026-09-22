@@ -1,19 +1,18 @@
-import { RunService } from "./run-service.mjs";
-
+import { randomUUID } from "node:crypto";
 export class SupabaseRunService {
   constructor({ repository, versions }) { this.r=repository; this.v=versions; }
 
-  ctx(c){ return new RunService({repository:null,versions:this.v}).ctx(c); }
+  ctx(c){ return if(!c?.user_id||!c?.tenant_id) throw new Error("Security Context required"); }
 
   async create(c,args){
     this.ctx(c);
-    const key=args.idempotency_key ?? `${c.tenant_id}:${args.execution_id ?? crypto.randomUUID()}`;
+    const key=args.idempotency_key ?? `${c.tenant_id}:${args.execution_id ?? randomUUID()}`;
     const jobs=await this.r.findBy("jobs",x=>x.tenant_id===c.tenant_id&&x.idempotency_key===key);
     if(jobs[0]){
       const runs=await this.r.findBy("runs",x=>x.job_id===jobs[0].id);
       if(runs[0]) return runs[0];
     }
-    const execution_id=args.execution_id ?? crypto.randomUUID();
+    const execution_id=args.execution_id ?? randomUUID();
     const job=await this.r.insert("jobs",{tenant_id:c.tenant_id,source_file_id:args.source_file_id??null,job_type:args.job_type??"PIPELINE",status:"PENDING",priority:0,idempotency_key:key,created_at:new Date().toISOString()});
     return this.r.insert("runs",{execution_id,tenant_id:c.tenant_id,job_id:job.id,engine_mode:"V6_NATIVE",engine_version:this.v.engine_version,profile_version_id:args.profile_version_id??null,rule_version_id:args.rule_version_id??null,configuration_version:args.configuration_version??null,configuration_hash:args.configuration_hash??null,status:"PENDING",progress:0,retry_count:0,statistics:{},errors:[],created_at:new Date().toISOString()});
   }
