@@ -10,7 +10,7 @@ test("configuration has isolated environment/version defaults", () => {
   const config = loadConfig({ NODE_ENV: "test", LOG_LEVEL: "debug", APP_NAME: "data-link-v6-test" });
   assert.equal(config.app.environment, "test");
   assert.equal(config.version.product_version, VERSION.product_version);
-  assert.equal(config.version.engine_version, "0.0.0");
+  assert.equal(config.version.engine_version, "V6-MATCH-2.3");
 });
 
 test("configuration rejects unsupported environment", () => {

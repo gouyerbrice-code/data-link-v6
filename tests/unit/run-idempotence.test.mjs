@@ -22,3 +22,25 @@ test("RUN step idempotency is unique within a run",()=>{
   const second=service.step(ctx,run.id,{step_type:"RAW",sequence:1,idempotency_key:"raw-key"});
   assert.equal(second.id, r.list("steps")[0].id);
 });
+
+test("RUN state machine accepts retry and rejects terminal regressions",()=>{
+  const r=new MemoryPipelineRepository(), service=new RunService({repository:r,versions:VERSION});
+  const run=service.create(ctx,{idempotency_key:"state-machine"});
+  service.transition(ctx,run.id,"RUNNING");
+  service.transition(ctx,run.id,"FAILED");
+  const retried=service.transition(ctx,run.id,"RUNNING");
+  assert.equal(retried.retry_count,1);
+  const completed=service.transition(ctx,run.id,"COMPLETED");
+  assert.equal(completed.status,"COMPLETED");
+  assert.throws(()=>service.transition(ctx,run.id,"RUNNING"), /Invalid RUN transition/);
+});
+
+test("STEP state machine rejects completion before start and supports retry",()=>{
+  const r=new MemoryPipelineRepository(), service=new RunService({repository:r,versions:VERSION});
+  const run=service.create(ctx,{idempotency_key:"step-state-machine"});
+  const step=service.step(ctx,run.id,{step_type:"RAW",sequence:1,idempotency_key:"raw"});
+  assert.throws(()=>service.stepTransition(ctx,step.id,"COMPLETED"), /Invalid STEP transition/);
+  service.stepTransition(ctx,step.id,"RUNNING");
+  service.stepTransition(ctx,step.id,"FAILED");
+  assert.equal(service.stepTransition(ctx,step.id,"RUNNING").status,"RUNNING");
+});

@@ -45,7 +45,8 @@ export function loadConfig(env = process.env) {
 
     supabase: {
       url: env.SUPABASE_URL ?? null,
-      anonKey: null,
+      anonKey: env.SUPABASE_PUBLISHABLE_KEY ?? null,
+      publishableKey: env.SUPABASE_PUBLISHABLE_KEY ?? null,
       secretKey: env.SUPABASE_SECRET_KEY ?? null,
     },
 
