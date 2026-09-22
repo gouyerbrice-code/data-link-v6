@@ -30,17 +30,17 @@ export class PipelineExecutionService {
       await this.runs.stepTransition(ctx,normStep.id,"RUNNING");
       const fieldRules=configuration.field_rules??{};
       const entities=[];
-      const existingEntities=await this.r.list("entities");
       for(const raw of rows){
         const normalized=normalizePayload(raw.payload,fieldRules);
         const identity={};
         for(const key of (configuration.identity_fields??[])) if(raw.payload[key]!==undefined) identity[key]=raw.payload[key];
-        const existing=existingEntities.find(e=>e.tenant_id===ctx.tenant_id&&e.run_id===run.id&&e.source_record_id===raw.id&&e.version===1);
-        if(!existing) entities.push(await this.r.insert("entities",{tenant_id:ctx.tenant_id,entity_type:configuration.entity_type??prof.domain,source_id:sf.source_id,source_file_id:sourceFileId,source_record_id:raw.id,run_id:run.id,normalized_payload:normalized,identity_payload:identity,version:1,status:"ACTIVE",created_at:new Date().toISOString(),updated_at:new Date().toISOString()}));
+        entities.push({tenant_id:ctx.tenant_id,entity_type:configuration.entity_type??prof.domain,source_id:sf.source_id,source_file_id:sourceFileId,source_record_id:raw.id,run_id:run.id,normalized_payload:normalized,identity_payload:identity,version:1,status:"ACTIVE",created_at:new Date().toISOString(),updated_at:new Date().toISOString()});
       }
-      await this.runs.stepTransition(ctx,normStep.id,"COMPLETED",{progress:100,output:{entity_count:entities.length}});
-      await this.runs.transition(ctx,run.id,"COMPLETED",{progress:100,statistics:{raw_records:rows.length,entities:entities.length,profiling_domain:prof.domain}});
-      return {run:await this.r.find("runs",run.id),profiling:pr,entities};
+      const persistedEntities=[];
+      for(let i=0;i<entities.length;i+=500) persistedEntities.push(...await this.r.insertMany("entities",entities.slice(i,i+500)));
+      await this.runs.stepTransition(ctx,normStep.id,"COMPLETED",{progress:100,output:{entity_count:persistedEntities.length}});
+      await this.runs.transition(ctx,run.id,"COMPLETED",{progress:100,statistics:{raw_records:rows.length,entities:persistedEntities.length,profiling_domain:prof.domain}});
+      return {run:await this.r.find("runs",run.id),profiling:pr,entities:persistedEntities};
     } catch (error) {
       await this.runs.transition(ctx,run.id,"FAILED",{errors:[{message:error.message,code:error.code??"EXECUTION_ERROR"}]});
       throw error;
