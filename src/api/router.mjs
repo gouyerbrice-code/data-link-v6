@@ -315,6 +315,10 @@ function requiredTenant(value) {
   return value;
 }
 
+function csvCell(value) {
+  return '"' + String(value ?? "").replaceAll('"','""').replaceAll("\r"," ").replaceAll("\n"," ") + '"';
+}
+
 function json(status, body, context) {
   return new Response(JSON.stringify(body), {
     status,
