@@ -1,4 +1,6 @@
 import { createRequestContext } from "../core/request-context.mjs";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { DataLinkError, ERROR_CODES, errorPayload } from "../core/errors.mjs";
 
 export function createRouter({ config, logger, identityService = null, resolveAuthenticatedUser = null, pipelineService = null, profileService = null, matchingService = null, executionService = null }) {
@@ -7,6 +9,13 @@ export function createRouter({ config, logger, identityService = null, resolveAu
     const context = createRequestContext(Object.fromEntries(request.headers.entries()));
 
     try {
+      if (request.method === "GET" && url.pathname === "/") {
+        const html = await readFile(fileURLToPath(new URL("../../frontend/index.html", import.meta.url)), "utf8");
+        return new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8", "x-request-id": context.request_id } });
+      }
+      if (request.method === "GET" && url.pathname === "/config") {
+        return json(200, { supabase_url: config.supabase.url, supabase_publishable_key: config.supabase.publishableKey }, context);
+      }
       if (request.method === "GET" && url.pathname === "/health") {
         return json(200, {
           status: "ok",
