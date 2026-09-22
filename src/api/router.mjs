@@ -204,21 +204,29 @@ export function createRouter({ config, logger, identityService = null, resolveAu
 
         const buffer = Buffer.from(await file.arrayBuffer());
 
-        return json(
-          201,
-          await pipelineService.ingestFile(
+        const ingestion = await pipelineService.ingestFile(
+          { user_id:userId, tenant_id:tenantId },
+          {
+            source_id:sourceId,
+            filename:file.name,
+            mime_type:file.type || "application/octet-stream",
+            buffer,
+            metadata,
+            idempotency_key:idempotencyKey,
+          },
+        );
+        if (!ingestion.duplicate) {
+          ingestion.raw_snapshot = await pipelineService.createRawSnapshot(
             { user_id:userId, tenant_id:tenantId },
             {
-              source_id:sourceId,
+              source_file_id:ingestion.source_file.id,
+              buffer,
               filename:file.name,
               mime_type:file.type || "application/octet-stream",
-              buffer,
-              metadata,
-              idempotency_key:idempotencyKey,
             },
-          ),
-          context,
-        );
+          );
+        }
+        return json(201, ingestion, context);
       }
 
       return json(404, {
