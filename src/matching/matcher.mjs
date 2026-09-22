@@ -10,7 +10,7 @@ const missing = (value) => normalizeValue(value) === "";
 
 export function isValidEan(value) {
   const ean = normalizeValue(value).replace(/\s+/g, "");
-  if (!/^\\d{8}$|^\\d{12,14}$/.test(ean)) return false;
+  if (!/^\d{8}$|^\d{12,14}$/.test(ean)) return false;
   const digits = ean.split("").map(Number);
   const check = digits.pop();
   let sum = 0;
