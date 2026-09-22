@@ -4,7 +4,7 @@ import { createLogger } from "./core/logger.mjs";
 import { createSupabaseAdapter } from "./infrastructure/supabase/client.mjs";
 import { IdentityRepository } from "./identity/repository/identity-repository.mjs";
 import { IdentityService } from "./identity/service/identity-service.mjs";
-import { MemoryPipelineRepository } from "./pipeline/memory-repository.mjs";
+import { SupabasePipelineRepository } from "./pipeline/supabase-repository.mjs";
 import { PipelineService } from "./ingestion/pipeline-service.mjs";
 import { PrivateLocalStorage } from "./storage/local-storage.mjs";
 import { ProfileService } from "./profiles/profile-service.mjs";
@@ -19,7 +19,7 @@ const logger=createLogger({level:config.logging.level,environment:config.app.env
 const supabase=createSupabaseAdapter({url:config.supabase.url,secretKey:config.supabase.secretKey});
 const identityRepository=new IdentityRepository({supabase});
 const identityService=new IdentityService({repository:identityRepository});
-const pipelineRepository=new MemoryPipelineRepository();
+const pipelineRepository=new SupabasePipelineRepository({supabase});
 const matchingRepository=new SupabaseMatchingRepository({supabase});
 const storage=new PrivateLocalStorage({root:process.env.DATALINK_STORAGE_ROOT??"./.datalink-storage"});
 const pipelineService=new PipelineService({repository:pipelineRepository,storage,securityContext:{},versions:VERSION});
