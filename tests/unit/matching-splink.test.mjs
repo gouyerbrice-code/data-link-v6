@@ -57,8 +57,8 @@ test("shadow mode compares Splink with deterministic reference", async () => {
     {
       left: [{ id: "A", ean: "123" }],
       right: [{ id: "B", ean: "123" }],
+      mode: "shadow",
     },
-    { mode: "shadow" },
   );
 
   assert.equal(result.engine, "shadow");
