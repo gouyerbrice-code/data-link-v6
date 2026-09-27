@@ -9,6 +9,7 @@ import { PipelineService } from "./ingestion/pipeline-service.mjs";
 import { PrivateLocalStorage } from "./storage/local-storage.mjs";
 import { ProfileService } from "./profiles/profile-service.mjs";
 import { VERSION } from "./core/version.mjs";
+import { SplinkAdapter, MatchingService, exactFallback } from "./matching/index.mjs";
 
 const config = loadConfig();
 
@@ -45,6 +46,18 @@ const profileService = new ProfileService({
   repository: pipelineRepository,
 });
 
+const splink = process.env.SPLINK_SERVICE_URL
+  ? new SplinkAdapter({
+      baseUrl: process.env.SPLINK_SERVICE_URL,
+      timeoutMs: Number(process.env.SPLINK_TIMEOUT_MS ?? 60000),
+    })
+  : null;
+
+const matchingService = new MatchingService({
+  splink,
+  fallback: exactFallback,
+});
+
 const server = createHttpServer({
   config,
   logger,
@@ -55,6 +68,7 @@ const server = createHttpServer({
     ),
   pipelineService,
   profileService,
+  matchingService,
 });
 
 server.listen(config.app.port, config.app.host, () => {
