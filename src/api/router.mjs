@@ -1,7 +1,7 @@
 import { createRequestContext } from "../core/request-context.mjs";
 import { DataLinkError, ERROR_CODES, errorPayload } from "../core/errors.mjs";
 
-export function createRouter({ config, logger, identityService = null, resolveAuthenticatedUser = null, pipelineService = null, profileService = null }) {
+export function createRouter({ config, logger, identityService = null, resolveAuthenticatedUser = null, pipelineService = null, profileService = null, matchingService = null }) {
   async function handle(request) {
     const url = new URL(request.url);
     const context = createRequestContext(Object.fromEntries(request.headers.entries()));
@@ -94,6 +94,22 @@ export function createRouter({ config, logger, identityService = null, resolveAu
             return json(200, entity, context);
           }
         }
+      }
+
+      if (matchingService && identityService && resolveAuthenticatedUser && request.method === "POST" && url.pathname === "/matching/link") {
+        const userId = await resolveAuthenticatedUser(request);
+        const tenantId = requiredTenant(request.headers.get("x-tenant-id"));
+        await identityService.getContext({ userId, tenantId });
+        const body = await request.json();
+        return json(200, await matchingService.compare(
+          { user_id: userId, tenant_id: tenantId },
+          {
+            left: body?.left,
+            right: body?.right,
+            settings: body?.settings ?? {},
+            mode: body?.mode,
+          },
+        ), context);
       }
 
       if (pipelineService && identityService && resolveAuthenticatedUser && request.method === "POST" && url.pathname === "/sources") {
