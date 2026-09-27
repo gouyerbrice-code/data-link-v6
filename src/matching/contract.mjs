@@ -1,6 +1,7 @@
 export const MATCHING_ENGINE_MODES = Object.freeze({
   SPLINK: "splink",
   FALLBACK: "fallback",
+  SHADOW: "shadow",
 });
 
 export function normalizeMatchingInput(records = []) {
