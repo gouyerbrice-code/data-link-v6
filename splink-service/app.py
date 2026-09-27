@@ -84,6 +84,24 @@ def link(request: LinkRequest):
         raise HTTPException(status_code=400, detail="_datalink_id is required on both datasets")
 
     settings = request.settings or {}
+    comparison_fields = [
+        item.get("field")
+        for item in (settings.get("comparison_fields") or [])
+        if item.get("field")
+    ]
+    if not comparison_fields:
+        comparison_fields = settings.get("identity_fields") or ["ean", "gtin", "barcode", "reference", "sku"]
+
+    missing = [
+        field for field in comparison_fields
+        if field not in left.columns or field not in right.columns
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "Comparison fields are missing from one or both datasets", "fields": missing},
+        )
+
     threshold = settings.get("threshold_match_probability")
     try:
         model = build_settings(settings)
