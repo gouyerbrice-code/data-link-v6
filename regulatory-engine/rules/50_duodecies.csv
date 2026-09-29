@@ -1,0 +1,5 @@
+position_nc,source_position_article,exclusion_ex,type_regle,territoire,section,regime,taux_tva_import,article,date_debut,condition
+90-14,90-14 à 90-15,NON,DIRECT,GP|MQ|REU,I,FRANCHISE_TVA_IMPORT,0,50_DUODECIES,2026-07-01,
+90-15,90-14 à 90-15,NON,DIRECT,GP|MQ|REU,I,FRANCHISE_TVA_IMPORT,0,50_DUODECIES,2026-07-01,
+39-25,Ex 39-25,OUI,CONDITIONNEL,GP|MQ|REU,I,FRANCHISE_TVA_IMPORT,0,50_DUODECIES,2026-07-01,Construction + élément fixe
+84-13,Ex 84-13,OUI,CONDITIONNEL,GP|MQ|REU,I,FRANCHISE_TVA_IMPORT,0,50_DUODECIES,2026-07-01,Usage industriel/agricole
