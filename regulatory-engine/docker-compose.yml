@@ -1,0 +1,15 @@
+services:
+  regulatory-engine:
+    build: .
+    container_name: datalink-regulatory-engine
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./rules:/app/rules:ro
+      - regulatory_uploads:/app/uploads
+    environment:
+      RULES_FILE: /app/rules/50_duodecies.csv
+
+volumes:
+  regulatory_uploads:
