@@ -1,5 +1,8 @@
 from pathlib import Path
-import os, re, io
+import io
+import os
+import re
+
 import pandas as pd
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -8,82 +11,137 @@ BASE = Path(__file__).resolve().parent.parent
 RULES_FILE = Path(os.getenv("RULES_FILE", BASE / "rules/50_duodecies.csv"))
 UI_FILE = BASE / "ui/index.html"
 
-app = FastAPI(title="DATALINK Regulatory Engine", version="0.1.0")
+app = FastAPI(title="Contrôle TVA — Article 50 duodecies", version="1.0.0")
 
 COLUMN_ALIASES = [
-    "code nc","code_nc","code douane","code douanier","nomenclature",
-    "nomenclature douaniere","nomenclature douanière","ndp","hs code",
-    "tarif douanier","tarif douaniere","tarif douanière","customs code",
-    "commodity code"
+    "code nc", "code_nc", "code douane", "code douanier", "nomenclature",
+    "nomenclature douaniere", "nomenclature douanière", "ndp", "ndp fournisseur",
+    "hs code", "tarif douanier", "tarif douaniere", "tarif douanière",
+    "customs code", "commodity code"
 ]
 
-def norm_text(v):
-    return re.sub(r"[^A-Z0-9]", "", str(v or "").upper())
+def norm_text(value):
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
 
-def normalize_nc(v):
-    s = norm_text(v)
-    if not s:
+def normalize_nc(value):
+    if value is None:
         return None
-    if not s.isdigit():
-        return None
-    if len(s) < 4:
-        return None
-    return s
+    text = str(value).strip()
+    if re.fullmatch(r"\d+\.0", text):
+        text = text[:-2]
+    digits = re.sub(r"\D", "", text)
+    return digits if len(digits) >= 4 else None
 
 def position_nc(code):
-    code = normalize_nc(code)
-    if not code:
-        return None
-    return f"{code[:2]}-{code[2:4]}"
+    digits = normalize_nc(code)
+    return f"{digits[:2]}-{digits[2:4]}" if digits else None
 
 def detect_nc_column(df):
     normalized = {norm_text(c): c for c in df.columns}
     for alias in COLUMN_ALIASES:
-        key = norm_text(alias)
-        if key in normalized:
-            return normalized[key]
-    # fallback: score columns by percentage of numeric-looking NC values
+        if norm_text(alias) in normalized:
+            return normalized[norm_text(alias)]
+
     best, score = None, 0
-    for c in df.columns:
-        vals = df[c].dropna().astype(str).head(300)
-        if len(vals) == 0:
+    for column in df.columns:
+        values = df[column].dropna().astype(str).head(500)
+        if values.empty:
             continue
-        good = sum(bool(re.fullmatch(r"\D*\d{4,10}\D*", x)) for x in vals)
-        ratio = good / len(vals)
+        good = sum(bool(re.search(r"\d{4,10}", value)) for value in values)
+        ratio = good / len(values)
         if ratio > score:
-            best, score = c, ratio
+            best, score = column, ratio
     return best if score >= 0.35 else None
 
 def load_rules():
     if not RULES_FILE.exists():
-        raise RuntimeError("Missing validated Article 50 duodecies rules file")
+        raise RuntimeError("Référentiel Article 50 duodecies introuvable.")
     rules = pd.read_csv(RULES_FILE, dtype=str).fillna("")
-    required = {"position_nc","type_regle","exclusion_ex","territoire","regime","taux_tva_import"}
+    required = {
+        "position_nc", "source_position_article", "exclusion_ex",
+        "type_regle", "territoire", "section", "regime",
+        "taux_tva_import", "article", "date_debut"
+    }
     missing = required - set(rules.columns)
     if missing:
-        raise RuntimeError(f"Rules file missing columns: {sorted(missing)}")
+        raise RuntimeError(f"Colonnes manquantes dans le référentiel : {sorted(missing)}")
+    rules["position_digits"] = (
+        rules["position_nc"].astype(str)
+        .str.replace("-", "", regex=False)
+        .str.replace(" ", "", regex=False)
+    )
+    rules["specificity"] = rules["position_digits"].str.len()
     return rules
 
-def rule_for_position(pos, territory="MQ"):
-    rules = load_rules()
-    r = rules[rules.position_nc.astype(str).str.upper() == str(pos).upper()]
-    if r.empty:
+def find_rule(code, territory="MQ"):
+    digits = normalize_nc(code)
+    if not digits:
         return None
-    # Prefer the requested territory, then GP/MQ/general.
-    preferred = r[r.territoire.str.contains(territory, case=False, na=False)]
-    return (preferred.iloc[0] if not preferred.empty else r.iloc[0]).to_dict()
+
+    rules = load_rules()
+    candidates = rules[
+        rules["position_digits"].apply(
+            lambda key: bool(key) and digits.startswith(key)
+        )
+    ].copy()
+
+    if candidates.empty:
+        return None
+
+    territory_candidates = candidates[
+        candidates["territoire"].str.contains(territory, case=False, na=False)
+    ]
+    if not territory_candidates.empty:
+        candidates = territory_candidates
+
+    max_specificity = candidates["specificity"].max()
+    candidates = candidates[candidates["specificity"] == max_specificity]
+    return candidates.iloc[0].to_dict()
 
 def decide(code, territory="MQ"):
+    digits = normalize_nc(code)
     pos = position_nc(code)
-    if not pos:
-        return {"position_nc":"","resultat":"CODE_NC_INVALIDE","action":"Corriger ou compléter le code NC","regle":""}
-    rule = rule_for_position(pos, territory)
+
+    if not digits:
+        return {
+            "nc_normalise": "", "position_nc": "",
+            "correspondance": "CODE INVALIDE",
+            "statut": "CODE_NC_INVALIDE",
+            "action": "Corriger ou compléter le code douanier",
+            "reference": ""
+        }
+
+    rule = find_rule(digits, territory)
     if not rule:
-        return {"position_nc":pos,"resultat":"NON_COUVERT","action":"Appliquer le régime TVA normal / vérifier une autre base juridique","regle":""}
-    typ = rule.get("type_regle","DIRECT")
-    if typ in ("CONDITIONNEL","EX"):
-        return {"position_nc":pos,"resultat":"CONTROLE_CONDITIONNEL","action":rule.get("condition","Vérifier les conditions de la règle"),"regle":rule.get("source_position_article",pos)}
-    return {"position_nc":pos,"resultat":"FRANCHISE_DIRECTE","action":"Aucune action TVA si les autres conditions d'importation sont satisfaites","regle":rule.get("source_position_article",pos)}
+        return {
+            "nc_normalise": digits, "position_nc": pos,
+            "correspondance": "NON",
+            "statut": "NON_TROUVE",
+            "action": "Non trouvé dans le référentiel Article 50 — vérifier le régime TVA applicable",
+            "reference": ""
+        }
+
+    conditional = (
+        str(rule.get("type_regle", "")).upper() == "CONDITIONNEL"
+        or str(rule.get("exclusion_ex", "")).upper() == "OUI"
+    )
+
+    if conditional:
+        return {
+            "nc_normalise": digits, "position_nc": pos,
+            "correspondance": "OUI",
+            "statut": "A_VERIFIER",
+            "action": "À vérifier : la ligne Article 50 comporte une condition / mention EX",
+            "reference": rule.get("source_position_article", "")
+        }
+
+    return {
+        "nc_normalise": digits, "position_nc": pos,
+        "correspondance": "OUI",
+        "statut": "COUVERT",
+        "action": "Couvert par le référentiel Article 50 duodecies",
+        "reference": rule.get("source_position_article", "")
+    }
 
 @app.get("/", response_class=HTMLResponse)
 def home():
@@ -91,49 +149,91 @@ def home():
 
 @app.get("/health")
 def health():
-    return {"status":"ok","service":"datalink-regulatory-engine","rules_file":str(RULES_FILE),"rules_loaded":RULES_FILE.exists()}
+    rules = load_rules()
+    return {
+        "status": "ok",
+        "service": "article-50-tva-check",
+        "referentiel": RULES_FILE.name,
+        "positions": len(rules),
+        "version": "2026-07-01"
+    }
 
 @app.post("/api/analyze")
 async def analyze(file: UploadFile = File(...), territory: str = "MQ"):
     raw = await file.read()
+    filename = (file.filename or "").lower()
+
     try:
-        if file.filename.lower().endswith(".csv"):
+        if filename.endswith(".csv"):
             df = pd.read_csv(io.BytesIO(raw), dtype=str)
-        elif file.filename.lower().endswith((".xlsx",".xls")):
+        elif filename.endswith((".xlsx", ".xls")):
             df = pd.read_excel(io.BytesIO(raw), dtype=str)
         else:
-            raise HTTPException(400, "Formats acceptés : CSV, XLSX")
+            raise HTTPException(400, "Formats acceptés : CSV, XLSX, XLS")
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(400, f"Fichier illisible : {e}")
+    except Exception as exc:
+        raise HTTPException(400, f"Fichier illisible : {exc}")
 
-    col = detect_nc_column(df)
-    if not col:
-        raise HTTPException(422, "Impossible d'identifier la colonne contenant le code NC")
+    column = detect_nc_column(df)
+    if not column:
+        raise HTTPException(422, "Impossible d'identifier la colonne contenant le code douanier / NDP.")
 
-    decisions = [decide(v, territory.upper()) for v in df[col]]
+    decisions = [decide(value, territory.upper()) for value in df[column]]
+
     out = df.copy()
-    out["NC_NORMALISE"] = [normalize_nc(v) or "" for v in df[col]]
+    out["NC_NORMALISE"] = [d["nc_normalise"] for d in decisions]
     out["POSITION_NC"] = [d["position_nc"] for d in decisions]
-    out["RESULTAT_TVA"] = [d["resultat"] for d in decisions]
+    out["ARTICLE_50_CORRESPONDANCE"] = [d["correspondance"] for d in decisions]
+    out["STATUT_CONTROLE"] = [d["statut"] for d in decisions]
     out["ACTION_A_FAIRE"] = [d["action"] for d in decisions]
-    out["REGLE_50_DUODECIES"] = [d["regle"] for d in decisions]
+    out["REFERENCE_ARTICLE_50"] = [d["reference"] for d in decisions]
 
-    stats = out["RESULTAT_TVA"].value_counts().to_dict()
+    stats = out["STATUT_CONTROLE"].value_counts().to_dict()
+
+    export_df = pd.DataFrame({
+        "ARTICLE_ID": "",
+        "REFERENCE_ARTICLE": "",
+        "CODE_DOUANIER_SOURCE": df[column],
+        "CODE_DOUANIER_NORMALISE": out["NC_NORMALISE"],
+        "POSITION_NC": out["POSITION_NC"],
+        "ARTICLE_50_CORRESPONDANCE": out["ARTICLE_50_CORRESPONDANCE"],
+        "STATUT_TVA": out["STATUT_CONTROLE"],
+        "ACTION": out["ACTION_A_FAIRE"],
+        "REFERENCE_ARTICLE_50": out["REFERENCE_ARTICLE_50"],
+        "VERSION_REFERENTIEL": "2026-07-01",
+        "ARTICLE_JURIDIQUE": "50_DUODECIES"
+    })
+
+    normalized_columns = {norm_text(c): c for c in df.columns}
+    for source in ["id", "article_id", "référence", "reference", "référence article"]:
+        key = norm_text(source)
+        if key in normalized_columns:
+            target = "ARTICLE_ID" if "id" in source else "REFERENCE_ARTICLE"
+            export_df[target] = df[normalized_columns[key]]
+            break
+
+    summary = pd.DataFrame([
+        {"indicateur": "Articles analysés", "nombre": len(out)},
+        {"indicateur": "Couverts", "nombre": int(stats.get("COUVERT", 0))},
+        {"indicateur": "À vérifier", "nombre": int(stats.get("A_VERIFIER", 0))},
+        {"indicateur": "Non trouvés", "nombre": int(stats.get("NON_TROUVE", 0))},
+        {"indicateur": "Codes invalides", "nombre": int(stats.get("CODE_NC_INVALIDE", 0))}
+    ])
+
     bio = io.BytesIO()
     with pd.ExcelWriter(bio, engine="openpyxl") as writer:
         out.to_excel(writer, index=False, sheet_name="CONTROLE_TVA")
-        pd.DataFrame([{"indicateur":k,"nombre":v} for k,v in stats.items()]).to_excel(writer,index=False,sheet_name="SYNTHESE")
+        summary.to_excel(writer, index=False, sheet_name="SYNTHESE")
+        export_df.to_excel(writer, index=False, sheet_name="EXPORT_DATALINK")
     bio.seek(0)
 
-    headers = {
-        "X-NC-Column": str(col),
-        "X-Lines": str(len(out)),
-        "X-Result-Summary": str(stats)
-    }
     return StreamingResponse(
         bio,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={**headers,"Content-Disposition":'attachment; filename="DATALINK_controle_tva.xlsx"'}
+        headers={
+            "X-NC-Column": str(column),
+            "X-Lines": str(len(out)),
+            "Content-Disposition": 'attachment; filename="controle_article_50_tva.xlsx"'
+        }
     )
