@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DATALINK — Contrôle réglementaire</title>
+<style>
+body{font-family:system-ui;margin:0;background:#f6f7f9;color:#17202a}
+main{max-width:760px;margin:8vh auto;padding:32px;background:#fff;border-radius:18px;box-shadow:0 8px 30px #0001}
+h1{margin-top:0} .drop{border:2px dashed #9aa4b2;padding:50px;text-align:center;border-radius:16px}
+button{margin-top:18px;padding:12px 22px;border:0;border-radius:10px;cursor:pointer}
+#status{margin-top:20px;white-space:pre-wrap}
+</style>
+</head>
+<body><main>
+<h1>Contrôle réglementaire DATALINK</h1>
+<p>Article 50 duodecies — TVA importation</p>
+<div class="drop">
+<input id="file" type="file" accept=".xlsx,.xls,.csv">
+<br><button onclick="analyze()">Analyser</button>
+</div>
+<div id="status"></div>
+<script>
+async function analyze(){
+ const f=document.getElementById('file').files[0], s=document.getElementById('status');
+ if(!f){s.textContent="Déposez un fichier.";return}
+ s.textContent="Analyse en cours…";
+ const fd=new FormData(); fd.append("file",f);
+ const r=await fetch("/api/analyze?territory=MQ",{method:"POST",body:fd});
+ if(!r.ok){s.textContent=await r.text();return}
+ const blob=await r.blob();
+ const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="DATALINK_controle_tva.xlsx"; a.click();
+ s.textContent="Analyse terminée. Le rapport Excel a été téléchargé.";
+}
+</script>
+</main></body></html>
